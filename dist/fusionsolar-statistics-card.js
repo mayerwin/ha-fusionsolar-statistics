@@ -8,7 +8,7 @@
  * MIT licence.
  */
 
-const CARD_VERSION = "0.1.0";
+const CARD_VERSION = "0.2.0";
 
 /* ------------------------------------------------------------------ palette */
 /* Sampled from the FusionSolar Android app. */
@@ -98,6 +98,9 @@ class FusionSolarStatisticsCard extends HTMLElement {
     this._error = null;
     this._built = false;
     this._lastFetchKey = null;
+    // Series hidden by tapping their legend pill, as the app allows. Kept on
+    // the element (not per-render) so the choice survives tab and date changes.
+    this._hidden = new Set();
   }
 
   static getConfigElement() {
@@ -122,9 +125,15 @@ class FusionSolarStatisticsCard extends HTMLElement {
     if (!config || !config.entities) {
       throw new Error("fusionsolar-statistics-card: `entities` is required");
     }
-    // `production` is the sensor the app's Production ring shows. On Huawei
-    // EMMA systems that is the inverter's AC yield, not the PV (DC) yield --
-    // see README. `pv_production` is kept as a deprecated alias.
+    // `production` is the sensor the app's Production ring shows: the PV (DC)
+    // yield. Measured against the app over a full clean day it matched to
+    // 0.05 kWh, whereas the inverter's AC yield came out 9.1 kWh LOW, because a
+    // DC-coupled battery's charging never becomes AC. `pv_production` is kept
+    // as a deprecated alias.
+    //
+    // `consumption` is optional but strongly recommended: a MEASURED house-load
+    // counter. Without it the card derives load from the production side, which
+    // ignores battery round-trip losses and overstates it. See README.
     const e = { ...config.entities };
     if (!e.production && e.pv_production) e.production = e.pv_production;
     for (const k of ["production", "fed_to_grid", "from_grid"]) {
@@ -173,7 +182,10 @@ class FusionSolarStatisticsCard extends HTMLElement {
         const s = new Date(a.getFullYear(), a.getMonth(), a.getDate());
         const e = new Date(s);
         e.setDate(e.getDate() + 1);
-        return { start: s, end: e, bucket: "hour", chartBucket: "5minute" };
+        // 5-minute buckets, not hourly: hourly statistics only close on the
+        // hour, so mid-afternoon the Day ring lagged the app by whatever had
+        // been produced since the last o'clock (0.5-2 kWh at midday).
+        return { start: s, end: e, bucket: "5minute", chartBucket: "5minute" };
       }
       case "month": {
         const s = new Date(a.getFullYear(), a.getMonth(), 1);
@@ -222,8 +234,8 @@ class FusionSolarStatisticsCard extends HTMLElement {
   _ids() {
     const e = this._config.entities;
     return {
-      energy: [e.production, e.fed_to_grid, e.from_grid, e.battery_charge, e.battery_discharge]
-        .filter(Boolean),
+      energy: [e.production, e.fed_to_grid, e.from_grid, e.consumption,
+               e.battery_charge, e.battery_discharge].filter(Boolean),
       power: [e.pv_power, e.load_power, e.grid_power, e.battery_power].filter(Boolean),
     };
   }
@@ -277,8 +289,20 @@ class FusionSolarStatisticsCard extends HTMLElement {
     const discharge = Math.max(0, sumOf(e.battery_discharge));
 
     const consumed = Math.max(0, production - fedToGrid);
-    const fromPv = Math.max(0, consumed - charge + discharge);
-    const consumption = fromPv + fromGrid;
+
+    // Prefer a MEASURED house-load counter. Deriving consumption from the
+    // production side (consumed - charge + discharge) systematically OVERSTATES
+    // it, because it ignores battery round-trip losses: on a real day charging
+    // 11.15 kWh and discharging 3.71 kWh, the derivation came out 1.18 kWh high
+    // against the app. The measured counter also mirrors the app's own
+    // arithmetic, which just splits the load into "From grid" and the rest.
+    let consumption;
+    if (e.consumption) {
+      consumption = Math.max(0, sumOf(e.consumption));
+    } else {
+      consumption = Math.max(0, consumed - charge + discharge) + fromGrid;
+    }
+    const fromPv = Math.max(0, consumption - fromGrid);
 
     const out = {
       production, fedToGrid, consumed,
@@ -385,11 +409,12 @@ class FusionSolarStatisticsCard extends HTMLElement {
     const pv = grab(e.production);
     const fed = grab(e.fed_to_grid);
     const imp = grab(e.from_grid);
+    const cons = grab(e.consumption);
     const chg = grab(e.battery_charge);
     const dis = grab(e.battery_discharge);
 
     const stamps = new Set();
-    [pv, fed, imp, chg, dis].forEach((m) => m.forEach((_, k) => stamps.add(k)));
+    [pv, fed, imp, cons, chg, dis].forEach((m) => m.forEach((_, k) => stamps.add(k)));
     let keys = [...stamps].sort((a, b) => a - b);
     if (!keys.length) return null;
 
@@ -399,9 +424,13 @@ class FusionSolarStatisticsCard extends HTMLElement {
       const i = Math.max(0, imp.get(t) || 0);
       const c = Math.max(0, chg.get(t) || 0);
       const d = Math.max(0, dis.get(t) || 0);
-      const selfC = Math.max(0, p - f);
-      const fromPv = Math.max(0, selfC - c + d);
-      return { t, production: p, consumption: fromPv + i, self: fromPv, charge: c, discharge: d };
+      // Same rule as the rings: use the measured load when it is configured,
+      // and only fall back to the lossy production-side derivation otherwise.
+      const total = e.consumption
+        ? Math.max(0, cons.get(t) || 0)
+        : Math.max(0, Math.max(0, p - f) - c + d) + i;
+      const fromPv = Math.max(0, total - i);
+      return { t, production: p, consumption: total, self: fromPv, charge: c, discharge: d };
     });
 
     // Lifetime rolls the monthly buckets up into calendar years.
@@ -466,6 +495,17 @@ class FusionSolarStatisticsCard extends HTMLElement {
     if (next) next.addEventListener("click", () => this._shift(1));
     const fs = wrap.querySelector(".fs-btn");
     if (fs) fs.addEventListener("click", () => this._toggleFullScreen());
+
+    // Legend pills toggle their series, like the app. Re-render only -- the
+    // data is already in hand, so this never refetches.
+    wrap.querySelectorAll(".pill[data-key]").forEach((el) => {
+      el.addEventListener("click", () => {
+        const k = el.dataset.key;
+        if (this._hidden.has(k)) this._hidden.delete(k);
+        else this._hidden.add(k);
+        this._render();
+      });
+    });
 
     const picker = wrap.querySelector(".picker");
     if (picker) {
@@ -657,9 +697,13 @@ class FusionSolarStatisticsCard extends HTMLElement {
     const ml = 52, mr = 14, mt = 34, mb = 38;
     const iw = W - ml - mr, ih = H - mt - mb;
 
+    // Hidden series are excluded from the scale too, so the axis rescales to
+    // what is actually shown -- otherwise hiding the big series leaves the
+    // remaining ones squashed against the bottom.
+    const series = chart.series.filter((s) => !this._hidden.has(s.key));
     let max = 0;
     for (const p of chart.points)
-      for (const s of chart.series) {
+      for (const s of series) {
         const v = p[s.key];
         if (v != null && v > max) max = v;
       }
@@ -682,7 +726,7 @@ class FusionSolarStatisticsCard extends HTMLElement {
     }
 
     let paths = "";
-    for (const s of chart.series) {
+    for (const s of series) {
       let dstr = "";
       let open = false;
       for (const p of chart.points) {
@@ -712,7 +756,8 @@ class FusionSolarStatisticsCard extends HTMLElement {
 
     // Choose a display unit: the app switches kWh -> MWh on the year/lifetime views.
     let peak = 0;
-    for (const r of rows) for (const s of chart.series) peak = Math.max(peak, r[s.key] || 0);
+    const series = chart.series.filter((s) => !this._hidden.has(s.key));
+    for (const r of rows) for (const s of series) peak = Math.max(peak, r[s.key] || 0);
     const useMwh = peak >= 1000;
     const scale = useMwh ? 1 / 1000 : 1;
     const unit = useMwh ? "MWh" : "kWh";
@@ -732,7 +777,7 @@ class FusionSolarStatisticsCard extends HTMLElement {
     // Slot geometry: every category gets an equal slot holding 5 thin bars.
     const slots = this._slotCount(chart);
     const slotW = iw / slots;
-    const nS = chart.series.length;
+    const nS = Math.max(1, series.length);
     const barW = Math.max(1.5, Math.min(9, (slotW * 0.85) / nS));
     const groupW = barW * nS;
 
@@ -741,7 +786,7 @@ class FusionSolarStatisticsCard extends HTMLElement {
       const idx = this._slotIndex(chart, r.t);
       if (idx < 0 || idx >= slots) continue;
       const x0 = ml + slotW * (idx + 0.5) - groupW / 2;
-      chart.series.forEach((s, i) => {
+      series.forEach((s, i) => {
         const v = (r[s.key] || 0) * scale;
         if (v <= 0) return;
         const hgt = Math.max(0.5, mt + ih - y(v));
@@ -801,10 +846,13 @@ class FusionSolarStatisticsCard extends HTMLElement {
     const series = (chart && chart.series) || [];
     if (!series.length) return "";
     return `<div class="legend">${series
-      .map(
-        (s) =>
-          `<span class="pill"><i style="background:${s.color}"></i>${escapeHtml(s.label)}</span>`
-      )
+      .map((s) => {
+        const off = this._hidden.has(s.key);
+        return `<button class="pill${off ? " off" : ""}" data-key="${escapeHtml(s.key)}"
+                  aria-pressed="${off ? "false" : "true"}"
+                  title="${off ? "Show" : "Hide"} ${escapeHtml(s.label)}"
+                ><i style="background:${off ? "transparent" : s.color};border-color:${s.color}"></i>${escapeHtml(s.label)}</button>`;
+      })
       .join("")}</div>`;
   }
 
@@ -945,10 +993,20 @@ class FusionSolarStatisticsCard extends HTMLElement {
       .legend { display: flex; flex-wrap: wrap; gap: .45em; margin-top: .7em; }
       .pill {
         display: inline-flex; align-items: center; gap: .42em;
-        background: ${C.cardBg}; border-radius: 999px; padding: .42em .8em;
-        font-size: .86em; color: #333; white-space: nowrap;
+        background: ${C.cardBg}; border: 0; border-radius: 999px; padding: .42em .8em;
+        font: inherit; font-size: .86em; color: #333; white-space: nowrap;
+        cursor: pointer; transition: opacity .12s;
+        -webkit-tap-highlight-color: transparent;
       }
-      .pill i { width: .6em; height: .6em; border-radius: 50%; display: inline-block; flex: none; }
+      .pill:hover { filter: brightness(.96); }
+      /* Tapping a pill hides its series; the pill dims and its dot hollows out
+         so it still reads as re-enable-able, the way the app does it. */
+      .pill.off { opacity: .45; }
+      .pill.off i { background: transparent !important; }
+      .pill i {
+        width: .6em; height: .6em; border-radius: 50%; display: inline-block;
+        flex: none; border: 1.5px solid transparent; box-sizing: border-box;
+      }
 
       .msg { padding: 2em .3em; color: ${C.sub}; text-align: center; font-size: 1em; }
       .msg.small { padding: 3em .3em; }

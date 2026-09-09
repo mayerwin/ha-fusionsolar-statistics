@@ -28,6 +28,7 @@ const ENT = {
   production: "sensor.demo_production",
   fed_to_grid: "sensor.demo_fed_to_grid",
   from_grid: "sensor.demo_from_grid",
+  consumption: "sensor.demo_consumption",
   battery_charge: "sensor.demo_battery_charge",
   battery_discharge: "sensor.demo_battery_discharge",
   pv_power: "sensor.demo_pv_power",
@@ -39,10 +40,10 @@ const ENT = {
 /* Totals each period should add up to (kWh). Invented, but in the range a
    mid-sized residential array with a battery actually produces. */
 const TARGETS = {
-  day:      { production: 22.84,  fed: 6.12,    grid: 1.83,   charge: 8.40,  discharge: 1.05 },
-  month:    { production: 512.40, fed: 198.65,  grid: 41.30,  charge: 150.2, discharge: 128.6 },
-  year:     { production: 6142.0, fed: 2430.5,  grid: 512.4,  charge: 1620,  discharge: 1495 },
-  lifetime: { production: 21840,  fed: 8960,    grid: 1740,   charge: 5900,  discharge: 5480 },
+  day:      { production: 22.84,  fed: 6.12,   grid: 1.83,  cons: 10.60,  charge: 8.40,  discharge: 1.05 },
+  month:    { production: 512.40, fed: 198.65, grid: 41.30, cons: 316.0,  charge: 150.2, discharge: 128.6 },
+  year:     { production: 6142.0, fed: 2430.5, grid: 512.4, cons: 3890.0, charge: 1620,  discharge: 1495 },
+  lifetime: { production: 21840,  fed: 8960,   grid: 1740,  cons: 13480,  charge: 5900,  discharge: 5480 },
 };
 
 /* Deterministic PRNG so screenshots are reproducible. */
@@ -59,7 +60,7 @@ function spread(weights, total) {
 const bell = (i, n, mid, width) => Math.exp(-Math.pow((i - mid) / width, 2));
 
 function hourlyWeights(n) {
-  const pv = [], fed = [], grid = [], chg = [], dis = [];
+  const pv = [], fed = [], grid = [], cons = [], chg = [], dis = [];
   for (let h = 0; h < n; h++) {
     const sun = bell(h, n, 12.2, 3.4);
     pv.push(sun);
@@ -67,12 +68,13 @@ function hourlyWeights(n) {
     grid.push(h < 6 || h > 19 ? 0.6 + rnd() * 0.5 : 0.05 * rnd());  // import at night
     chg.push(h >= 8 && h <= 14 ? sun * (0.8 + rnd() * 0.4) : 0);    // charge on sun
     dis.push(h >= 17 && h <= 22 ? 0.7 + rnd() * 0.6 : 0);           // discharge evening
+    cons.push(0.5 + rnd() * 0.3 + (h >= 6 && h <= 9 ? 1.2 : 0) + (h >= 17 && h <= 21 ? 1.6 : 0)); // household load curve
   }
-  return { pv, fed, grid, chg, dis };
+  return { pv, fed, grid, cons, chg, dis };
 }
 
 function dailyWeights(n) {
-  const pv = [], fed = [], grid = [], chg = [], dis = [];
+  const pv = [], fed = [], grid = [], cons = [], chg = [], dis = [];
   for (let d = 0; d < n; d++) {
     const cloud = 0.45 + rnd() * 0.55;      // day-to-day weather
     pv.push(cloud);
@@ -80,12 +82,13 @@ function dailyWeights(n) {
     grid.push(0.3 + rnd() * 0.9);
     chg.push(cloud * (0.7 + rnd() * 0.5));
     dis.push(0.6 + rnd() * 0.6);
+    cons.push(0.8 + rnd() * 0.4);
   }
-  return { pv, fed, grid, chg, dis };
+  return { pv, fed, grid, cons, chg, dis };
 }
 
 function monthlyWeights(months) {
-  const pv = [], fed = [], grid = [], chg = [], dis = [];
+  const pv = [], fed = [], grid = [], cons = [], chg = [], dis = [];
   for (let i = 0; i < months; i++) {
     const m = i % 12;
     const season = 0.55 + 0.45 * Math.cos((m / 12) * 2 * Math.PI); // seasonal swing
@@ -94,8 +97,9 @@ function monthlyWeights(months) {
     grid.push(1.3 - season * 0.7 + rnd() * 0.3);
     chg.push(season * (0.8 + rnd() * 0.3));
     dis.push(0.8 + rnd() * 0.4);
+    cons.push(0.9 + rnd() * 0.25);
   }
-  return { pv, fed, grid, chg, dis };
+  return { pv, fed, grid, cons, chg, dis };
 }
 
 function buildEnergy(period) {
@@ -124,6 +128,7 @@ function buildEnergy(period) {
     [ENT.production]: spread(w.pv, t.production),
     [ENT.fed_to_grid]: spread(w.fed, t.fed),
     [ENT.from_grid]: spread(w.grid, t.grid),
+    [ENT.consumption]: spread(w.cons, t.cons),
     [ENT.battery_charge]: spread(w.chg, t.charge),
     [ENT.battery_discharge]: spread(w.dis, t.discharge),
   };

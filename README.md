@@ -37,6 +37,8 @@ card does exactly that, and nothing else.
   Huawei inverters accept only one Modbus TCP connection at a time.
 - **Responsive.** Sizes derive from the card's own width via CSS container queries, so it
   keeps the app's proportions on a phone and stays legible on a wide desktop card.
+- **Tap a legend pill to hide that series**, as the app does. The pill dims, its dot hollows
+  out, and the chart's axis rescales to what is left. Tap again to bring it back.
 
 ## Installation
 
@@ -65,10 +67,12 @@ default_period: day          # day | month | year | lifetime
 show_full_screen: true
 entities:
   # --- required: cumulative energy sensors (kWh) ---
-  production: sensor.inverter_total_yield
+  production: sensor.emma_total_pv_energy_yield    # PV (DC) yield, NOT inverter AC yield
   fed_to_grid: sensor.emma_total_feed_in_to_grid
   from_grid: sensor.emma_total_supply_from_grid
-  # --- optional but strongly recommended: battery energy ---
+  # --- strongly recommended: measured house load (see below) ---
+  consumption: sensor.emma_total_energy_consumption
+  # --- optional: battery energy, for the chart series ---
   battery_charge: sensor.emma_total_charged_energy
   battery_discharge: sensor.emma_total_discharged_energy
   # --- optional: power sensors, used only by the Day chart (W) ---
@@ -91,10 +95,11 @@ entities:
 
 | Key | Required | Unit | Meaning |
 |---|---|---|---|
-| `production` | ✅ | kWh | Cumulative generation — see the note below |
+| `production` | ✅ | kWh | Cumulative **PV (DC) yield** — see the note below |
 | `fed_to_grid` | ✅ | kWh | Cumulative export |
 | `from_grid` | ✅ | kWh | Cumulative import |
-| `battery_charge` | — | kWh | Cumulative energy into the battery |
+| `consumption` | — | kWh | Cumulative **measured house load**. Strongly recommended: without it the card derives load and overstates it by the battery's round-trip losses |
+| `battery_charge` | — | kWh | Cumulative energy into the battery (chart series, and the fallback derivation) |
 | `battery_discharge` | — | kWh | Cumulative energy out of the battery |
 | `pv_power` | — | W | Day chart: PV output |
 | `load_power` | — | W | Day chart: house load |
@@ -116,36 +121,41 @@ Production ring   total = production
                   Consumed    = production - fed_to_grid
                   Fed to grid = fed_to_grid
 
-Consumption ring  total = From PV + From grid
+Consumption ring  total = consumption          (measured house load)
                   From grid = from_grid
-                  From PV   = (production - fed_to_grid) - battery_charge + battery_discharge
+                  From PV   = consumption - from_grid
 ```
 
 "Consumed" (production side) includes generation that went into the **battery**; "From PV"
-(consumption side) is what the *house* actually drew from solar, so it subtracts battery
-charging and adds battery discharging. That is why the two rings legitimately disagree.
+(consumption side) is what the *house* actually drew. That is why the two rings legitimately
+disagree, and it is the most confusing thing about this screen.
 
-### ⚠ Which sensor to use for `production`
+### ⚠ Use the PV yield for `production`, and a measured counter for `consumption`
 
-This matters a lot. On a Huawei **EMMA** system, use the **inverter's AC yield**, not the
-EMMA PV (DC) yield. Deviation from the app's own Lifetime figures, measured on an EMMA-based
-system:
+Both matter, and both were wrong in early versions of this card. Validated over a **full,
+undisturbed day** against the app on an EMMA system:
 
-| Field | PV (DC) yield | Inverter AC yield |
-|---|---|---|
-| production | +8.6% | **+0.4%** |
-| consumed | +16.8% | **−1.8%** |
-| from PV | +19.9% | **+0.8%** |
-| consumption | +18.4% | **+0.9%** |
+| Field | card | app | delta |
+|---|---|---|---|
+| production | 18.07 | 18.12 | **−0.05** |
+| consumed | 15.70 | 15.72 | **−0.02** |
+| fed to grid | 2.37 | 2.40 | **−0.03** |
+| from grid | 0.73 | 0.73 | **0.00** |
 
-A unit-free cross-check agrees: the consumed share came out at 47.0% using PV yield and 42.7%
-using inverter yield, against the app's 43.7%.
+- **`production` = the PV (DC) yield.** The inverter's **AC** yield came out **9.1 kWh low**
+  on that same day, because with a DC-coupled battery the energy that charges it never becomes
+  AC. A *lifetime* comparison misleadingly favours AC yield, since over years charging and
+  discharging roughly cancel — so do not validate on lifetime totals alone.
+- **`consumption` = a measured house-load counter**, if your system exposes one. Deriving load
+  from the production side as `consumed - battery_charge + battery_discharge` ignores
+  **battery round-trip losses**: on a day charging 11.15 kWh and discharging 3.71 kWh it
+  overstated load by 1.18 kWh. The card still falls back to that derivation when `consumption`
+  is not configured, but the measured counter is materially more accurate.
 
-**Validate with cumulative lifetime registers, never same-day counters.** A system reset
-clears the daily registers on the Modbus side while the cloud keeps the whole day, so a
-same-day comparison can look wildly wrong for reasons unrelated to the model. Expect ~1–2%
-residual drift between Modbus and FusionSolar's cloud regardless — they do not account
-identically.
+**Validate on a full, undisturbed day.** A system reset clears the daily registers on the
+Modbus side while the cloud keeps the whole day, which makes a same-day comparison look wildly
+wrong for reasons unrelated to the model. Expect ~1–2% residual drift regardless — Modbus and
+FusionSolar's cloud do not account identically.
 
 ## Data resolution
 
