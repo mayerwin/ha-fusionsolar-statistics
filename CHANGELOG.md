@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-09-09
+
+### Changed
+- **Recommend `sensor.emma_feed_in_power` for `grid_power`, not `sensor.emma_active_power`.**
+  The Day chart derives *Consumed from PV* as `load - grid`, and those two values are only
+  comparable if they come from the same Modbus read. `huawei-solar-lib` batches registers into
+  single FC3 transactions (span within 64, gap under 16); `pv_output_power`, `load_power`,
+  `feed_in_power` and `battery_charge_discharge_power` share one batch, while
+  `sensor.emma_active_power` resolves to `active_power_built_in_energy` and is fetched
+  separately. The two grid registers agreed to a 2 W median over a day of testing, so this is a
+  drop-in change with the same *positive = import* convention.
+
+### Documentation
+- New section on picking co-batched power sensors, including how to confirm the grouping on
+  your own system with one poll of `huawei_solar.device.base` debug logging.
+- New section on battery sign conventions, and how they differ between this card, the Home
+  Assistant Energy dashboard and `power-flow-card-plus`.
+
 ## [0.2.0] - 2026-09-09
 
 ### Fixed

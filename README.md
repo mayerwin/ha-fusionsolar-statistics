@@ -78,7 +78,7 @@ entities:
   # --- optional: power sensors, used only by the Day chart (W) ---
   pv_power: sensor.emma_pv_output_power
   load_power: sensor.emma_load_power
-  grid_power: sensor.emma_active_power                        # positive = importing
+  grid_power: sensor.emma_feed_in_power                       # positive = importing
   battery_power: sensor.emma_battery_charge_discharge_power   # positive = charging
 ```
 
@@ -103,7 +103,7 @@ entities:
 | `battery_discharge` | — | kWh | Cumulative energy out of the battery |
 | `pv_power` | — | W | Day chart: PV output |
 | `load_power` | — | W | Day chart: house load |
-| `grid_power` | — | W | Day chart: grid, **positive = import** |
+| `grid_power` | — | W | Day chart: grid, **positive = import**. See the batching note below |
 | `battery_power` | — | W | Day chart: battery, **positive = charging** |
 
 All energy entities must be **cumulative counters** that Home Assistant records as `sum`
@@ -111,6 +111,48 @@ statistics. The card reads per-bucket deltas via `recorder/statistics_during_per
 `types: ["change"]`, so it never double-counts and needs no helper or template sensors.
 
 > `pv_production` is accepted as a deprecated alias for `production`.
+
+### ⚠ Prefer power sensors your integration reads in one batch
+
+The Day chart derives *Consumed from PV* as `load_power - grid_import`. That subtraction only
+means something if both values describe the same instant.
+
+Modbus integrations do not fetch every register in a single request. `huawei-solar-lib`, for
+one, sorts the registers it needs and groups them while the span stays within 64 registers and
+the gap between neighbours stays under 16. Each group becomes **one FC3 transaction**, so
+values from the same group are an atomic snapshot of the device and values from different
+groups are not.
+
+On an EMMA system `pv_output_power` (30354), `load_power` (30356), `feed_in_power` (30358) and
+`battery_charge_discharge_power` (30360) all arrive in one read. `sensor.emma_active_power`
+does not: it resolves to the register `active_power_built_in_energy`, fetched separately. Use
+**`sensor.emma_feed_in_power`** for `grid_power` for that reason. Both carry the same quantity
+with the same *positive = import* convention (they agreed to a 2 W median over a day of
+testing), but only one of them is co-batched with the rest.
+
+To check the grouping on your own system, enable debug logging for a single poll:
+
+```yaml
+logger:
+  logs:
+    huawei_solar.device.base: debug
+```
+
+then look for `Batch update of the following registers: ...` in the log.
+
+This matters most for **live** power diagrams, where a mismatched pair can be worth kilowatts
+during a fast cloud edge. It barely affects this card's rings and bars, which are built from
+cumulative kWh statistics, but the Day chart's line series are drawn from these power sensors,
+so the guidance applies there too.
+
+### ⚠ Battery sign conventions are not universal
+
+`battery_power` is expected here as **positive = charging**, which is Huawei's native
+convention, and the card splits it into its Charge and Discharge series on that basis. Other
+consumers assume the opposite: Home Assistant's own Energy dashboard wants
+`power_config.stat_rate_inverted`, and `power-flow-card-plus` reads a combined battery entity
+as *negative = charging* unless you set `invert_state: true` on it. Getting this backwards is
+silent: the numbers stay plausible, the arrows just point the wrong way.
 
 ## How the numbers are derived
 

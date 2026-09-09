@@ -8,7 +8,7 @@
  * MIT licence.
  */
 
-const CARD_VERSION = "0.2.0";
+const CARD_VERSION = "0.2.1";
 
 /* ------------------------------------------------------------------ palette */
 /* Sampled from the FusionSolar Android app. */
