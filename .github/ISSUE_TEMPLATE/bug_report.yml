@@ -1,0 +1,45 @@
+name: Bug report
+description: Something renders wrong or the numbers look off
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Numbers that disagree with the FusionSolar app are usually an entity
+        choice, not a bug - please check the "How the numbers are derived"
+        section of the README first.
+  - type: input
+    id: ha
+    attributes:
+      label: Home Assistant version
+      placeholder: "2026.9.1"
+    validations: { required: true }
+  - type: input
+    id: card
+    attributes:
+      label: Card version
+      placeholder: "0.1.0"
+    validations: { required: true }
+  - type: input
+    id: hardware
+    attributes:
+      label: Huawei hardware
+      description: Inverter model, and EMMA / SDongle / SmartLogger, plus battery if any
+      placeholder: "e.g. SUN2000 inverter + EMMA, with battery"
+    validations: { required: true }
+  - type: textarea
+    id: yaml
+    attributes:
+      label: Card configuration
+      render: yaml
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, what you expected, and what the FusionSolar app shows
+    validations: { required: true }
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot

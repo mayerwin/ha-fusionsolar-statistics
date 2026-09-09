@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FusionSolar Statistics Card — demo</title>
+<style>
+  html, body { margin: 0; background: #fff; font-family: Roboto, system-ui, sans-serif; }
+  #host { width: 100%; }
+  ha-card { display: block; background: #fff; border-radius: 12px; }
+</style>
+</head>
+<body>
+<div id="host"></div>
+
+<script src="../dist/fusionsolar-statistics-card.js"></script>
+<script>
+/* ------------------------------------------------------------------------
+   Standalone demo harness.
+
+   Renders the card against synthetic-but-plausible statistics, with no Home
+   Assistant involved. Used to generate the README screenshots (see
+   tools/make-screenshots.js) and handy for tweaking the visuals offline.
+
+   Open with ?period=day|month|year|lifetime
+   ------------------------------------------------------------------------ */
+
+const ENT = {
+  production: "sensor.demo_production",
+  fed_to_grid: "sensor.demo_fed_to_grid",
+  from_grid: "sensor.demo_from_grid",
+  battery_charge: "sensor.demo_battery_charge",
+  battery_discharge: "sensor.demo_battery_discharge",
+  pv_power: "sensor.demo_pv_power",
+  load_power: "sensor.demo_load_power",
+  grid_power: "sensor.demo_grid_power",
+  battery_power: "sensor.demo_battery_power",
+};
+
+/* Totals each period should add up to (kWh). Invented, but in the range a
+   mid-sized residential array with a battery actually produces. */
+const TARGETS = {
+  day:      { production: 22.84,  fed: 6.12,    grid: 1.83,   charge: 8.40,  discharge: 1.05 },
+  month:    { production: 512.40, fed: 198.65,  grid: 41.30,  charge: 150.2, discharge: 128.6 },
+  year:     { production: 6142.0, fed: 2430.5,  grid: 512.4,  charge: 1620,  discharge: 1495 },
+  lifetime: { production: 21840,  fed: 8960,    grid: 1740,   charge: 5900,  discharge: 5480 },
+};
+
+/* Deterministic PRNG so screenshots are reproducible. */
+let _seed = 20260908;
+const rnd = () => ((_seed = (_seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+
+const sum = (a) => a.reduce((s, v) => s + v, 0);
+/** Scale a weight vector so it sums exactly to `total`. */
+function spread(weights, total) {
+  const s = sum(weights) || 1;
+  return weights.map((w) => (w / s) * total);
+}
+/** Bell curve centred on `mid`, used for daylight-shaped distributions. */
+const bell = (i, n, mid, width) => Math.exp(-Math.pow((i - mid) / width, 2));
+
+function hourlyWeights(n) {
+  const pv = [], fed = [], grid = [], chg = [], dis = [];
+  for (let h = 0; h < n; h++) {
+    const sun = bell(h, n, 12.2, 3.4);
+    pv.push(sun);
+    fed.push(h >= 10 && h <= 15 ? sun * (0.6 + rnd() * 0.5) : 0);   // export at midday
+    grid.push(h < 6 || h > 19 ? 0.6 + rnd() * 0.5 : 0.05 * rnd());  // import at night
+    chg.push(h >= 8 && h <= 14 ? sun * (0.8 + rnd() * 0.4) : 0);    // charge on sun
+    dis.push(h >= 17 && h <= 22 ? 0.7 + rnd() * 0.6 : 0);           // discharge evening
+  }
+  return { pv, fed, grid, chg, dis };
+}
+
+function dailyWeights(n) {
+  const pv = [], fed = [], grid = [], chg = [], dis = [];
+  for (let d = 0; d < n; d++) {
+    const cloud = 0.45 + rnd() * 0.55;      // day-to-day weather
+    pv.push(cloud);
+    fed.push(cloud * (0.5 + rnd() * 0.6));
+    grid.push(0.3 + rnd() * 0.9);
+    chg.push(cloud * (0.7 + rnd() * 0.5));
+    dis.push(0.6 + rnd() * 0.6);
+  }
+  return { pv, fed, grid, chg, dis };
+}
+
+function monthlyWeights(months) {
+  const pv = [], fed = [], grid = [], chg = [], dis = [];
+  for (let i = 0; i < months; i++) {
+    const m = i % 12;
+    const season = 0.55 + 0.45 * Math.cos((m / 12) * 2 * Math.PI); // seasonal swing
+    pv.push(season * (0.85 + rnd() * 0.3));
+    fed.push(season * (0.7 + rnd() * 0.5));
+    grid.push(1.3 - season * 0.7 + rnd() * 0.3);
+    chg.push(season * (0.8 + rnd() * 0.3));
+    dis.push(0.8 + rnd() * 0.4);
+  }
+  return { pv, fed, grid, chg, dis };
+}
+
+function buildEnergy(period) {
+  const t = TARGETS[period];
+  const now = new Date();
+  let stamps = [], w;
+
+  if (period === "day") {
+    const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    for (let h = 0; h < 24; h++) stamps.push(new Date(base).setHours(h));
+    w = hourlyWeights(24);
+  } else if (period === "month") {
+    const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    for (let d = 1; d <= days; d++) stamps.push(new Date(now.getFullYear(), now.getMonth(), d).getTime());
+    w = dailyWeights(days);
+  } else if (period === "year") {
+    for (let m = 0; m < 12; m++) stamps.push(new Date(now.getFullYear(), m, 1).getTime());
+    w = monthlyWeights(12);
+  } else {
+    for (let y = now.getFullYear() - 2; y <= now.getFullYear(); y++)
+      for (let m = 0; m < 12; m++) stamps.push(new Date(y, m, 1).getTime());
+    w = monthlyWeights(stamps.length);
+  }
+
+  const series = {
+    [ENT.production]: spread(w.pv, t.production),
+    [ENT.fed_to_grid]: spread(w.fed, t.fed),
+    [ENT.from_grid]: spread(w.grid, t.grid),
+    [ENT.battery_charge]: spread(w.chg, t.charge),
+    [ENT.battery_discharge]: spread(w.dis, t.discharge),
+  };
+
+  const out = {};
+  for (const [id, vals] of Object.entries(series)) {
+    out[id] = stamps.map((s, i) => ({ start: s, end: s, change: vals[i] }));
+  }
+  return out;
+}
+
+/** 5-minute power means for the Day chart (W). */
+function buildPower() {
+  const now = new Date();
+  const base = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const pv = [], load = [], grid = [], bat = [];
+  for (let i = 0; i < 288; i++) {
+    const t = base + i * 5 * 60000;
+    const h = i / 12;
+    const sun = Math.max(0, bell(h, 24, 12.2, 3.1) * 9200 * (0.75 + 0.25 * Math.sin(i / 3)));
+    const p = h > 5.8 && h < 18.4 ? Math.max(0, sun * (0.85 + rnd() * 0.3)) : 0;
+    const l = 380 + rnd() * 500 + (h > 6 && h < 9 ? 1400 : 0) + (h > 17.5 && h < 21 ? 1900 : 0);
+    let b = 0;
+    if (h >= 8 && h <= 14) b = Math.min(5000, p * 0.45);          // charging (positive)
+    else if (h >= 17.5 && h <= 22.5) b = -Math.min(3600, l * 0.8); // discharging (negative)
+    const g = l - p + b;                                          // + import / - export
+    pv.push({ start: t, mean: p });
+    load.push({ start: t, mean: l });
+    grid.push({ start: t, mean: g });
+    bat.push({ start: t, mean: b });
+  }
+  return {
+    [ENT.pv_power]: pv, [ENT.load_power]: load,
+    [ENT.grid_power]: grid, [ENT.battery_power]: bat,
+  };
+}
+
+const params = new URLSearchParams(location.search);
+const PERIOD = params.get("period") || "day";
+
+const hass = {
+  async callWS(msg) {
+    if (msg.type !== "recorder/statistics_during_period") return {};
+    if ((msg.types || []).includes("mean")) {
+      if (msg.period !== "5minute") return {};       // force the primary path
+      const all = buildPower();
+      const out = {};
+      for (const id of msg.statistic_ids) if (all[id]) out[id] = all[id];
+      return out;
+    }
+    const all = buildEnergy(PERIOD);
+    const out = {};
+    for (const id of msg.statistic_ids) if (all[id]) out[id] = all[id];
+    return out;
+  },
+};
+
+const card = document.createElement("fusionsolar-statistics-card");
+card.setConfig({
+  type: "custom:fusionsolar-statistics-card",
+  title: "Energy Management",
+  default_period: PERIOD,
+  entities: ENT,
+});
+document.getElementById("host").appendChild(card);
+card.hass = hass;
+</script>
+</body>
+</html>
