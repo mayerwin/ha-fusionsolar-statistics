@@ -4,6 +4,28 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-10
+
+### Added
+- **`production_mode`**, deciding what the Production ring counts.
+  - `ac_plus_storage` reproduces the FusionSolar app: `production` is the inverter's AC yield
+    and the battery's net charge is added back (`AC yield + charged - discharged`). Requires
+    `battery_charge` and `battery_discharge`.
+  - `pv` (default, unchanged behaviour) reports the measured PV (DC) yield.
+
+### Fixed
+- **The app's Production is an AC-side figure, not the PV yield.** It excludes DC to AC
+  conversion loss, battery charging loss and the inverter's self-consumption, so the PV (DC)
+  counter reads systematically higher. Measured against an app screenshot at the same minute:
+  PV yield 20.35 kWh against the app's 18.50 kWh (+1.85), while `ac_plus_storage` gave 18.63
+  (+0.13, entirely a three-minute cutoff offset). The gap was 1.72 kWh, 8.5% of PV.
+
+### Removed
+- **Retracted the "validated to 0.05 kWh over a full day" claim for the PV yield.** That
+  comparison was run against corrupted history: the days involved show more inverter AC yield
+  than PV yield, which is impossible, and a counter-reset artifact inflating one day's total.
+  A day where AC yield exceeds PV yield is unusable for validation, and the README now says so.
+
 ## [0.2.1] - 2026-09-09
 
 ### Changed

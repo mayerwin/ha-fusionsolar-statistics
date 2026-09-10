@@ -8,7 +8,7 @@
  * MIT licence.
  */
 
-const CARD_VERSION = "0.2.1";
+const CARD_VERSION = "0.3.0";
 
 /* ------------------------------------------------------------------ palette */
 /* Sampled from the FusionSolar Android app. */
@@ -125,11 +125,24 @@ class FusionSolarStatisticsCard extends HTMLElement {
     if (!config || !config.entities) {
       throw new Error("fusionsolar-statistics-card: `entities` is required");
     }
-    // `production` is the sensor the app's Production ring shows: the PV (DC)
-    // yield. Measured against the app over a full clean day it matched to
-    // 0.05 kWh, whereas the inverter's AC yield came out 9.1 kWh LOW, because a
-    // DC-coupled battery's charging never becomes AC. `pv_production` is kept
-    // as a deprecated alias.
+    // `production_mode` decides what the Production ring counts.
+    //
+    //   "pv"               `production` is the PV (DC) yield: what the panels
+    //                      generated, losses included.
+    //   "ac_plus_storage"  `production` is the inverter's AC yield, and the
+    //                      battery's net charge is added back. This is what the
+    //                      FusionSolar app shows, and it EXCLUDES DC->AC
+    //                      conversion, battery charging losses and the
+    //                      inverter's own self-consumption.
+    //
+    // The two differ by those losses: measured on an EMMA system over a clean
+    // half-day, DC yield 20.35 kWh vs 18.63 kWh derived, a gap of 1.72 kWh
+    // (8.5%). The app read 18.50 kWh. Pick "ac_plus_storage" to agree with the
+    // app, "pv" to report what the array actually produced.
+    //
+    // Note the AC yield ALONE is not a substitute for either: it omits every
+    // kWh that charged a DC-coupled battery, which never becomes AC.
+    // `pv_production` is kept as a deprecated alias for `production`.
     //
     // `consumption` is optional but strongly recommended: a MEASURED house-load
     // counter. Without it the card derives load from the production side, which
@@ -139,9 +152,19 @@ class FusionSolarStatisticsCard extends HTMLElement {
     for (const k of ["production", "fed_to_grid", "from_grid"]) {
       if (!e[k]) throw new Error(`fusionsolar-statistics-card: entities.${k} is required`);
     }
+    const mode = config.production_mode || "pv";
+    if (!["pv", "ac_plus_storage"].includes(mode)) {
+      throw new Error(
+        `fusionsolar-statistics-card: production_mode must be "pv" or "ac_plus_storage"`);
+    }
+    if (mode === "ac_plus_storage" && !(e.battery_charge && e.battery_discharge)) {
+      throw new Error("fusionsolar-statistics-card: production_mode " +
+        '"ac_plus_storage" needs entities.battery_charge and entities.battery_discharge');
+    }
     this._config = {
       title: "Energy Management",
       default_period: "day",
+      production_mode: mode,
       show_full_screen: true,
       ...config,
       entities: e,
@@ -282,11 +305,18 @@ class FusionSolarStatisticsCard extends HTMLElement {
     const series = (id) => (id && energy[id]) || [];
     const sumOf = (id) => series(id).reduce((s, r) => s + (r.change || 0), 0);
 
-    const production = Math.max(0, sumOf(e.production));
     const fedToGrid = Math.max(0, sumOf(e.fed_to_grid));
     const fromGrid = Math.max(0, sumOf(e.from_grid));
     const charge = Math.max(0, sumOf(e.battery_charge));
     const discharge = Math.max(0, sumOf(e.battery_discharge));
+
+    // In "ac_plus_storage" the configured counter is the inverter's AC yield,
+    // so the energy that charged the battery has to be added back and the
+    // energy it gave up has to be taken out again to avoid counting it twice.
+    const reported = Math.max(0, sumOf(e.production));
+    const production = this._config.production_mode === "ac_plus_storage"
+      ? Math.max(0, reported + charge - discharge)
+      : reported;
 
     const consumed = Math.max(0, production - fedToGrid);
 
@@ -419,11 +449,15 @@ class FusionSolarStatisticsCard extends HTMLElement {
     if (!keys.length) return null;
 
     const rows = keys.map((t) => {
-      const p = Math.max(0, pv.get(t) || 0);
       const f = Math.max(0, fed.get(t) || 0);
       const i = Math.max(0, imp.get(t) || 0);
       const c = Math.max(0, chg.get(t) || 0);
       const d = Math.max(0, dis.get(t) || 0);
+      // Same production model as the rings, applied per bucket.
+      const pReported = Math.max(0, pv.get(t) || 0);
+      const p = this._config.production_mode === "ac_plus_storage"
+        ? Math.max(0, pReported + c - d)
+        : pReported;
       // Same rule as the rings: use the measured load when it is configured,
       // and only fall back to the lossy production-side derivation otherwise.
       const total = e.consumption

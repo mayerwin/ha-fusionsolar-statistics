@@ -64,10 +64,12 @@ card does exactly that, and nothing else.
 type: custom:fusionsolar-statistics-card
 title: Energy Management
 default_period: day          # day | month | year | lifetime
+production_mode: ac_plus_storage   # ac_plus_storage (matches the app) | pv
 show_full_screen: true
 entities:
   # --- required: cumulative energy sensors (kWh) ---
-  production: sensor.emma_total_pv_energy_yield    # PV (DC) yield, NOT inverter AC yield
+  # ac_plus_storage -> the inverter's AC yield;  pv -> the PV (DC) yield
+  production: sensor.emma_inverter_total_energy_yield
   fed_to_grid: sensor.emma_total_feed_in_to_grid
   from_grid: sensor.emma_total_supply_from_grid
   # --- strongly recommended: measured house load (see below) ---
@@ -88,6 +90,7 @@ entities:
 |---|---|---|---|
 | `title` | string | `Energy Management` | Heading above the donuts |
 | `default_period` | string | `day` | Tab selected on load |
+| `production_mode` | string | `pv` | `pv` or `ac_plus_storage`. See below. `ac_plus_storage` requires `battery_charge` and `battery_discharge` |
 | `show_full_screen` | bool | `true` | Show the Full Screen button |
 | `entities` | map | — | See below |
 
@@ -95,7 +98,7 @@ entities:
 
 | Key | Required | Unit | Meaning |
 |---|---|---|---|
-| `production` | ✅ | kWh | Cumulative **PV (DC) yield** — see the note below |
+| `production` | ✅ | kWh | Cumulative production counter. With `production_mode: pv` (default) this is the **PV (DC) yield**; with `ac_plus_storage` it is the **inverter's AC yield**. See the note below |
 | `fed_to_grid` | ✅ | kWh | Cumulative export |
 | `from_grid` | ✅ | kWh | Cumulative import |
 | `consumption` | — | kWh | Cumulative **measured house load**. Strongly recommended: without it the card derives load and overstates it by the battery's round-trip losses |
@@ -172,32 +175,53 @@ Consumption ring  total = consumption          (measured house load)
 (consumption side) is what the *house* actually drew. That is why the two rings legitimately
 disagree, and it is the most confusing thing about this screen.
 
-### ⚠ Use the PV yield for `production`, and a measured counter for `consumption`
+### ⚠ Choosing `production_mode`, and a measured counter for `consumption`
 
-Both matter, and both were wrong in early versions of this card. Validated over a **full,
-undisturbed day** against the app on an EMMA system:
+**The app's Production number is not the PV yield.** It is an AC-side figure: what actually
+came out of the inverter, plus whatever is currently sitting in the battery. It therefore
+excludes DC to AC conversion loss, battery charging loss, and the inverter's own
+self-consumption. The PV (DC) yield counter includes all of them, so it reads higher.
 
-| Field | card | app | delta |
+Measured on an EMMA system over a clean half-day, reconstructed from Home Assistant's
+5-minute statistics at the exact minute of an app screenshot:
+
+| Figure | app | `production_mode: pv` | `production_mode: ac_plus_storage` |
 |---|---|---|---|
-| production | 18.07 | 18.12 | **−0.05** |
-| consumed | 15.70 | 15.72 | **−0.02** |
-| fed to grid | 2.37 | 2.40 | **−0.03** |
-| from grid | 0.73 | 0.73 | **0.00** |
+| Production | 18.50 | 20.35 (**+1.85**) | 18.63 (**+0.13**) |
+| Fed to grid | 2.36 | 2.36 | 2.36 |
+| Consumption | 10.45 | 10.65 | 10.65 |
+| From grid | 0.06 | 0.06 | 0.06 |
 
-- **`production` = the PV (DC) yield.** The inverter's **AC** yield came out **9.1 kWh low**
-  on that same day, because with a DC-coupled battery the energy that charges it never becomes
-  AC. A *lifetime* comparison misleadingly favours AC yield, since over years charging and
-  discharging roughly cancel — so do not validate on lifetime totals alone.
-- **`consumption` = a measured house-load counter**, if your system exposes one. Deriving load
-  from the production side as `consumed - battery_charge + battery_discharge` ignores
-  **battery round-trip losses**: on a day charging 11.15 kWh and discharging 3.71 kWh it
-  overstated load by 1.18 kWh. The card still falls back to that derivation when `consumption`
-  is not configured, but the measured counter is materially more accurate.
+Everything except production already agreed, because everything else is an AC-side quantity
+the meter measures directly. The residual +0.13 is a three-minute offset between the screenshot
+and the statistics cutoff, and it appears on both sides, so it cancels.
+
+The gap between the two modes was **1.72 kWh, 8.5% of PV**, on that day. It is real energy: it
+left the panels and never reached the meter or the battery.
+
+- **`ac_plus_storage`** reproduces the app. Set `production` to the inverter's AC yield, and
+  configure `battery_charge` and `battery_discharge`; the card computes
+  `AC yield + charged - discharged`.
+- **`pv`** (the default, for backward compatibility) reports what the array physically
+  generated. Set `production` to the PV (DC) yield.
+
+> **Do not use the AC yield alone in `pv` mode.** It omits every kWh that charged a DC-coupled
+> battery, since that energy never becomes AC, and it came out 9.1 kWh low over one day on the
+> system above. A *lifetime* comparison hides this, because charging and discharging roughly
+> cancel over years, so never validate on lifetime totals alone.
+
+**`consumption` should be a measured house-load counter**, if your system exposes one. Deriving
+load from the production side as `consumed - battery_charge + battery_discharge` ignores
+battery round-trip losses: on a day charging 11.15 kWh and discharging 3.71 kWh it overstated
+load by 1.18 kWh. The card still falls back to that derivation when `consumption` is not
+configured, but the measured counter is materially more accurate.
 
 **Validate on a full, undisturbed day.** A system reset clears the daily registers on the
 Modbus side while the cloud keeps the whole day, which makes a same-day comparison look wildly
-wrong for reasons unrelated to the model. Expect ~1–2% residual drift regardless — Modbus and
-FusionSolar's cloud do not account identically.
+wrong for reasons unrelated to the model. It also corrupts long-term statistics: a reset can
+leave a day showing more AC yield than PV yield, which is physically impossible and a reliable
+sign the day is unusable for validation. Expect ~1-2% residual drift regardless, since Modbus
+and FusionSolar's cloud do not account identically.
 
 ## Data resolution
 
