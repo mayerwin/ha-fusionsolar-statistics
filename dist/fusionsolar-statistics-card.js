@@ -4,7 +4,7 @@
  * "Statistics" screen (Day / Month / Year / Lifetime) from Home Assistant's own
  * long-term statistics. No cloud access, no FusionSolar account required.
  *
- * https://github.com/mayerwin/fusionsolar-statistics
+ * https://github.com/mayerwin/ha-fusionsolar-statistics
  * MIT licence.
  */
 
@@ -1145,7 +1145,7 @@ window.customCards.push({
   description:
     "Reproduces the Huawei FusionSolar app Statistics screen (Day/Month/Year/Lifetime) from Home Assistant statistics.",
   preview: true,
-  documentationURL: "https://github.com/mayerwin/fusionsolar-statistics",
+  documentationURL: "https://github.com/mayerwin/ha-fusionsolar-statistics",
 });
 
 console.info(
