@@ -4,6 +4,26 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-09-21
+
+### Fixed
+- **The card was unreadable on a dark theme.** Every neutral was a hard-coded light-theme
+  grey, so on a dark card the date navigator, its chevrons and caret, the section title and
+  the ring totals were near-black text on a near-black background, effectively invisible.
+  The neutrals are now CSS custom properties that resolve to Home Assistant's own
+  `--primary-text-color`, `--secondary-text-color` and `--divider-color`, so a custom theme
+  is picked up as well. Light/dark is read from `hass.themes.darkMode` and mirrored onto a
+  `data-theme` attribute on the card; the standalone demo, which has no `hass`, falls back to
+  `prefers-color-scheme`.
+- **Opaque light panels on a dark card.** The stat cards, legend pills, tab track and Full
+  Screen button were painted `#F5F6F7` regardless of theme. On dark they are now a
+  translucent white overlay, so they sit on whatever card colour the theme provides.
+- **Chart grid lines** were a fixed light grey drawn as an inline attribute; they are now
+  styled from the theme's divider colour.
+- The donut's drop shadow is dropped on dark (it only ever read as a smudge), and
+  `color-scheme: dark` is set so the native date/month picker and the year `<select>` open
+  dark rather than white.
+
 ## [0.3.0] - 2026-09-10
 
 ### Added

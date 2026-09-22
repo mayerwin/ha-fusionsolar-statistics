@@ -7,6 +7,16 @@
   html, body { margin: 0; background: #fff; font-family: Roboto, system-ui, sans-serif; }
   #host { width: 100%; }
   ha-card { display: block; background: #fff; border-radius: 12px; }
+  /* ?theme=dark stands in for a dark Home Assistant theme: the page supplies
+     the same variables the frontend would. */
+  body.dark { background: #111214; }
+  body.dark #host {
+    --primary-text-color: #e1e1e1;
+    --secondary-text-color: #9b9b9b;
+    --divider-color: rgba(225,225,225,.12);
+    --card-background-color: #1c1c1e;
+  }
+  body.dark ha-card { background: #1c1c1e; }
 </style>
 </head>
 <body>
@@ -21,7 +31,7 @@
    Assistant involved. Used to generate the README screenshots (see
    tools/make-screenshots.js) and handy for tweaking the visuals offline.
 
-   Open with ?period=day|month|year|lifetime
+   Open with ?period=day|month|year|lifetime&theme=light|dark
    ------------------------------------------------------------------------ */
 
 const ENT = {
@@ -168,8 +178,11 @@ function buildPower() {
 
 const params = new URLSearchParams(location.search);
 const PERIOD = params.get("period") || "day";
+const DARK = params.get("theme") === "dark";
+if (DARK) document.body.classList.add("dark");
 
 const hass = {
+  themes: { darkMode: DARK },
   async callWS(msg) {
     if (msg.type !== "recorder/statistics_during_period") return {};
     if ((msg.types || []).includes("mean")) {

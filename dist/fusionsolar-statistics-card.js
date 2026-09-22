@@ -8,7 +8,7 @@
  * MIT licence.
  */
 
-const CARD_VERSION = "0.3.0";
+const CARD_VERSION = "0.3.1";
 
 /* ------------------------------------------------------------------ palette */
 /* Sampled from the FusionSolar Android app. */
@@ -20,13 +20,11 @@ const C = {
   mint: "#74D3A5", // chart: production / PV output
   blueLite: "#A5AEF5", // chart: battery charge
   blueDark: "#2C6FE0", // chart: battery discharge
-  ink: "#1D1D1F",
-  sub: "#6B6B6B",
-  faint: "#9A9A9A",
-  gridLine: "#D5D7DA",
-  cardBg: "#F5F6F7",
-  tabBg: "#F1F2F4",
 };
+
+/* Neutrals are NOT in the palette: they come from the Home Assistant theme via
+   the CSS custom properties in _css(), so the card reads correctly on a dark
+   theme too. Only the brand colours above are fixed. */
 
 const PERIODS = [
   { key: "day", label: "Day" },
@@ -178,7 +176,25 @@ class FusionSolarStatisticsCard extends HTMLElement {
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
+    this._syncTheme();
     if (first) this._maybeFetch();
+  }
+
+  /** Mirror Home Assistant's light/dark choice onto the host; the CSS keys off
+      the attribute. It is written on every hass update, and set even when the
+      theme is light, so the prefers-color-scheme fallback below cannot fight a
+      light HA theme on a dark OS. */
+  _syncTheme() {
+    const t = this._hass && this._hass.themes;
+    const dark = t && (t.darkMode !== undefined ? t.darkMode : t.dark_mode);
+    if (dark === undefined || dark === null) {
+      // A frontend too old to report it: leave the attribute off and let the
+      // prefers-color-scheme fallback decide.
+      delete this.dataset.theme;
+      return;
+    }
+    const want = dark ? "dark" : "light";
+    if (this.dataset.theme !== want) this.dataset.theme = want;
   }
 
   getCardSize() {
@@ -186,6 +202,7 @@ class FusionSolarStatisticsCard extends HTMLElement {
   }
 
   connectedCallback() {
+    if (this._hass) this._syncTheme();
     this._render();
     if (this._hass) this._maybeFetch();
     // Refresh live-ish while visible.
@@ -642,14 +659,12 @@ class FusionSolarStatisticsCard extends HTMLElement {
         total: d.production,
         left: { value: d.consumed, label: "Consumed", color: C.darkGreen, of: d.production },
         right: { value: d.fedToGrid, label: "Fed to grid", color: C.liteGreen, of: d.production },
-        centerColor: C.ink,
       })}
       ${this._ringBlock({
         caption: "Consumption",
         total: d.consumption,
         left: { value: d.fromPv, label: "From PV", color: C.orange, of: d.consumption },
         right: { value: d.fromGrid, label: "From grid", color: C.amber, of: d.consumption },
-        centerColor: C.ink,
       })}
       </div>
       ${this._config.show_full_screen
@@ -750,7 +765,7 @@ class FusionSolarStatisticsCard extends HTMLElement {
     for (let i = 0; i <= ticks; i++) {
       const v = (top / ticks) * i;
       const yy = y(v);
-      g += `<line x1="${ml}" y1="${yy}" x2="${W - mr}" y2="${yy}" stroke="${C.gridLine}" stroke-width="1" stroke-dasharray="${i === 0 ? "0" : "7 6"}"/>`;
+      g += `<line x1="${ml}" y1="${yy}" x2="${W - mr}" y2="${yy}" class="gridline" stroke-dasharray="${i === 0 ? "0" : "7 6"}"/>`;
       g += `<text x="${ml - 10}" y="${yy + 5}" text-anchor="end" class="ax">${trimNum(v)}</text>`;
     }
     // The app labels 00:00 .. 20:00 only; the plot area still spans the full 24 h.
@@ -804,7 +819,7 @@ class FusionSolarStatisticsCard extends HTMLElement {
     for (let i = 0; i <= ticks; i++) {
       const v = (top / ticks) * i;
       const yy = y(v);
-      g += `<line x1="${ml}" y1="${yy}" x2="${W - mr}" y2="${yy}" stroke="${C.gridLine}" stroke-width="1" stroke-dasharray="${i === 0 ? "0" : "7 6"}"/>`;
+      g += `<line x1="${ml}" y1="${yy}" x2="${W - mr}" y2="${yy}" class="gridline" stroke-dasharray="${i === 0 ? "0" : "7 6"}"/>`;
       g += `<text x="${ml - 10}" y="${yy + 5}" text-anchor="end" class="ax">${trimNum(v)}</text>`;
     }
 
@@ -898,13 +913,62 @@ class FusionSolarStatisticsCard extends HTMLElement {
        proportions hold at phone width and stay sane on a wide desktop card. */
     return `
       :host { display:block; }
+
+      /* ---- theme tokens ----
+         Only the ring/chart brand colours are fixed; every neutral comes from
+         here, so the card is legible on a dark theme instead of painting near
+         black text onto a near black card. Home Assistant's own variables come
+         first (a custom theme then just works), with the FusionSolar greys as
+         the fallback. The data-theme attribute is set from hass.themes.darkMode; the media
+         query only covers the standalone demo, where there is no hass to ask. */
+      :host {
+        --fsc-ink: var(--primary-text-color, #1D1D1F);
+        --fsc-sub: var(--secondary-text-color, #6B6B6B);
+        --fsc-faint: #9A9A9A;
+        --fsc-grid: var(--divider-color, #D5D7DA);
+        --fsc-surface: #F5F6F7;   /* stat cards, legend pills, tab track */
+        --fsc-chip: #FFFFFF;      /* the selected tab */
+        --fsc-chip-shadow: 0 1px 3px rgba(0,0,0,.10);
+        --fsc-hairline: #B6B6B6;
+        --fsc-ring-shadow: drop-shadow(0 2px 4px rgba(0,0,0,.12));
+        --fsc-card-bg: var(--ha-card-background, var(--card-background-color, #fff));
+      }
+      /* Translucent surfaces, so they sit on whatever card colour the theme
+         gives us rather than assuming one. */
+      :host([data-theme="dark"]) {
+        color-scheme: dark;
+        --fsc-ink: var(--primary-text-color, #E9E9EB);
+        --fsc-sub: var(--secondary-text-color, #A9A9AE);
+        --fsc-faint: #8B8B91;
+        --fsc-grid: var(--divider-color, rgba(255,255,255,.17));
+        --fsc-surface: rgba(255,255,255,.07);
+        --fsc-chip: rgba(255,255,255,.17);
+        --fsc-chip-shadow: 0 1px 3px rgba(0,0,0,.45);
+        --fsc-hairline: rgba(255,255,255,.34);
+        --fsc-ring-shadow: none;
+      }
+      @media (prefers-color-scheme: dark) {
+        :host(:not([data-theme="light"])) {
+          color-scheme: dark;
+          --fsc-ink: var(--primary-text-color, #E9E9EB);
+          --fsc-sub: var(--secondary-text-color, #A9A9AE);
+          --fsc-faint: #8B8B91;
+          --fsc-grid: var(--divider-color, rgba(255,255,255,.17));
+          --fsc-surface: rgba(255,255,255,.07);
+          --fsc-chip: rgba(255,255,255,.17);
+          --fsc-chip-shadow: 0 1px 3px rgba(0,0,0,.45);
+          --fsc-hairline: rgba(255,255,255,.34);
+          --fsc-ring-shadow: none;
+        }
+      }
+
       ha-card {
         display: block;          /* explicit, so the standalone demo works too */
         container-type: inline-size;
         padding: 12px 12px 16px;
         font-family: var(--paper-font-body1_-_font-family, Roboto, system-ui, sans-serif);
-        color: ${C.ink};
-        background: var(--ha-card-background, var(--card-background-color, #fff));
+        color: var(--fsc-ink);
+        background: var(--fsc-card-bg);
       }
       ha-card.fullscreen {
         position: fixed; inset: 0; z-index: 9999; overflow: auto;
@@ -915,17 +979,17 @@ class FusionSolarStatisticsCard extends HTMLElement {
       /* ---- segmented tabs ---- */
       .tabs {
         display: grid; grid-template-columns: repeat(4, 1fr);
-        background: ${C.tabBg}; border-radius: 999px; padding: 0.21em; gap: 0.14em;
+        background: var(--fsc-surface); border-radius: 999px; padding: 0.21em; gap: 0.14em;
       }
       .tab {
         appearance: none; border: 0; background: transparent; cursor: pointer;
-        font: inherit; font-size: 1.04em; color: ${C.sub};
+        font: inherit; font-size: 1.04em; color: var(--fsc-sub);
         padding: 0.6em 0.2em; border-radius: 999px;
         transition: background .15s, color .15s; white-space: nowrap;
       }
       .tab.active {
-        background: #fff; color: ${C.ink}; font-weight: 600;
-        box-shadow: 0 1px 3px rgba(0,0,0,.10);
+        background: var(--fsc-chip); color: var(--fsc-ink); font-weight: 600;
+        box-shadow: var(--fsc-chip-shadow);
       }
 
       /* ---- date navigator ---- */
@@ -935,7 +999,7 @@ class FusionSolarStatisticsCard extends HTMLElement {
       }
       .navbtn {
         appearance: none; border: 0; background: transparent; cursor: pointer;
-        padding: 0.2em 0.5em; line-height: 0; color: #3c3c3c;
+        padding: 0.2em 0.5em; line-height: 0; color: var(--fsc-ink);
       }
       .navbtn svg { width: 1.5em; height: 1.5em; }
       .navbtn.disabled { opacity: .28; pointer-events: none; }
@@ -957,18 +1021,21 @@ class FusionSolarStatisticsCard extends HTMLElement {
       }
       .caret {
         width: 0; height: 0; border-left: .34em solid transparent;
-        border-right: .34em solid transparent; border-top: .4em solid ${C.ink};
+        border-right: .34em solid transparent; border-top: .4em solid var(--fsc-ink);
       }
 
-      .section { font-size: 1.29em; font-weight: 500; margin: 1em .15em .8em; }
+      .section {
+        font-size: 1.29em; font-weight: 500; margin: 1em .15em .8em;
+        color: var(--fsc-ink);
+      }
       .sub {
-        font-size: 1.04em; color: #5a5a5a; margin: 0 .15em .6em;
+        font-size: 1.04em; color: var(--fsc-sub); margin: 0 .15em .6em;
         display: flex; align-items: center; gap: .4em;
       }
       .info {
         display: inline-flex; align-items: center; justify-content: center;
-        width: 1.05em; height: 1.05em; border: 1px solid #b6b6b6; border-radius: 50%;
-        font-size: .78em; font-style: italic; color: #9a9a9a; font-family: Georgia, serif;
+        width: 1.05em; height: 1.05em; border: 1px solid var(--fsc-hairline); border-radius: 50%;
+        font-size: .78em; font-style: italic; color: var(--fsc-faint); font-family: Georgia, serif;
         flex: none;
       }
 
@@ -983,7 +1050,7 @@ class FusionSolarStatisticsCard extends HTMLElement {
       .ringinner { font-size: clamp(12px, 3.25cqi, 17px); }
       .statrow { position: relative; margin-bottom: 1.9em; }
       .statcard {
-        background: ${C.cardBg}; border-radius: .85em;
+        background: var(--fsc-surface); border-radius: .85em;
         display: flex; align-items: center; min-height: 4.6em; padding: .6em .3em;
       }
       .side { flex: 1; text-align: left; padding-left: 1.15em; min-width: 0; }
@@ -991,28 +1058,28 @@ class FusionSolarStatisticsCard extends HTMLElement {
       .gap { width: 8.6em; flex: none; }
       .val { font-size: 1.21em; font-weight: 700; line-height: 1.15; white-space: nowrap; }
       .val .unit { font-size: .59em; font-weight: 600; margin-left: .2em; }
-      .lbl { font-size: .86em; color: ${C.sub}; margin-top: .25em; }
-      .pct { font-size: .79em; color: ${C.faint}; margin-top: .1em; }
+      .lbl { font-size: .86em; color: var(--fsc-sub); margin-top: .25em; }
+      .pct { font-size: .79em; color: var(--fsc-faint); margin-top: .1em; }
 
       .donut {
         position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
         width: 8em; height: 8em; border-radius: 50%;
-        background: var(--ha-card-background, var(--card-background-color, #fff));
+        background: var(--fsc-card-bg);
         display: flex; align-items: center; justify-content: center;
       }
       .donut svg {
         position: absolute; inset: 0; width: 100%; height: 100%;
-        filter: drop-shadow(0 2px 4px rgba(0,0,0,.12));
+        filter: var(--fsc-ring-shadow);
       }
       .donut-text { position: relative; text-align: center; }
       .dv { font-size: 1.43em; font-weight: 500; line-height: 1.1; }
-      .du { font-size: .86em; color: ${C.ink}; margin-top: .1em; }
+      .du { font-size: .86em; color: var(--fsc-ink); margin-top: .1em; }
 
       /* ---- full screen ---- */
       .fsrow { display: flex; justify-content: flex-end; margin: .2em 0 .8em; }
       .fs-btn {
         appearance: none; border: 0; cursor: pointer; font: inherit; font-size: 1.04em;
-        background: ${C.tabBg}; color: ${C.ink}; border-radius: .55em;
+        background: var(--fsc-surface); color: var(--fsc-ink); border-radius: .55em;
         padding: .6em .9em; display: inline-flex; align-items: center; gap: .5em;
       }
       .fs-btn svg { width: 1em; height: 1em; }
@@ -1020,19 +1087,20 @@ class FusionSolarStatisticsCard extends HTMLElement {
       /* ---- chart ---- */
       .chartbox { width: 100%; overflow: hidden; }
       svg.chart { width: 100%; height: auto; display: block; }
-      .ax { font-size: 17px; fill: ${C.faint}; font-family: inherit; }
-      .ax.unit { fill: ${C.sub}; }
+      .ax { font-size: 17px; fill: var(--fsc-faint); font-family: inherit; }
+      .ax.unit { fill: var(--fsc-sub); }
+      .gridline { stroke: var(--fsc-grid); stroke-width: 1; }
 
       /* ---- legend ---- */
       .legend { display: flex; flex-wrap: wrap; gap: .45em; margin-top: .7em; }
       .pill {
         display: inline-flex; align-items: center; gap: .42em;
-        background: ${C.cardBg}; border: 0; border-radius: 999px; padding: .42em .8em;
-        font: inherit; font-size: .86em; color: #333; white-space: nowrap;
+        background: var(--fsc-surface); border: 0; border-radius: 999px; padding: .42em .8em;
+        font: inherit; font-size: .86em; color: var(--fsc-ink); white-space: nowrap;
         cursor: pointer; transition: opacity .12s;
         -webkit-tap-highlight-color: transparent;
       }
-      .pill:hover { filter: brightness(.96); }
+      .pill:hover { opacity: .85; }
       /* Tapping a pill hides its series; the pill dims and its dot hollows out
          so it still reads as re-enable-able, the way the app does it. */
       .pill.off { opacity: .45; }
@@ -1042,7 +1110,7 @@ class FusionSolarStatisticsCard extends HTMLElement {
         flex: none; border: 1.5px solid transparent; box-sizing: border-box;
       }
 
-      .msg { padding: 2em .3em; color: ${C.sub}; text-align: center; font-size: 1em; }
+      .msg { padding: 2em .3em; color: var(--fsc-sub); text-align: center; font-size: 1em; }
       .msg.small { padding: 3em .3em; }
       .msg.err { color: var(--error-color, #c62828); }
     `;
